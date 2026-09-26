@@ -1,0 +1,47 @@
+# nasbutler 配置示例。复制为 config.toml 后按需修改。
+# 规则写法同 .gitignore：不带斜杠的模式匹配任意深度（"*.kdbx"），开头的斜杠锚定到根
+#（"/backup"），结尾的 "/**" 可省略。匹配不区分大小写。匹配到目录即覆盖其下全部内容。
+
+# 要整理的根目录。nasbutler 只读访问它，从不写入。
+root = "/srv/archive"
+
+# 状态目录：索引库、化名密钥、审计日志。不能和 root 互相包含。
+state_dir = "/var/lib/nasbutler"
+
+[rules]
+# 完全不可见：不扫描、不计数，agent 连它存在都不知道。
+hidden = [
+  # "/private",
+]
+
+# 只计总数和总大小，不列文件、不读内容。适合备份区这类"别碰也别看"的目录。
+opaque = [
+  # "/backup",
+]
+
+# 追加的机密规则（内置规则始终生效，见 internal/rules/builtin.go）。
+# 机密文件的名字整体换成化名，内容不读。
+secret = [
+  # "病历",
+  # "/work/hr",
+]
+
+[scan]
+# 文本类文件读开头多少字节做敏感检测。
+max_content_bytes = 1048576
+# 扫描后找重复文件（大小相同 → 首尾各 64 KiB 哈希 → 全文件哈希）。
+hash = true
+# 小于这个字节数的文件不参与去重。
+hash_min_size = 1
+
+[serve]
+# HTTP 监听地址，MCP 端点是 /mcp。别直接监听公网。
+listen = "127.0.0.1:8765"
+# bearer token 文件（必须 chmod 600，至少 24 个字符）。环境变量 NASBUTLER_TOKEN 优先。
+token_file = ""
+# 单次工具返回的字节上限，超过就拒绝，防止批量导出。
+max_result_bytes = 65536
+# 单次最多返回多少条。
+max_limit = 200
+# 媒体探测用的 ffprobe；设为 "" 关闭。
+ffprobe = "ffprobe"
