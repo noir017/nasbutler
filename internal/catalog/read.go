@@ -258,6 +258,49 @@ func (d *DB) Get(id int64) (File, error) {
 	return f, err
 }
 
+// ErrAmbiguous means a redacted directory path stands for more than one
+// real directory (say, one name in UTF-8 and one in GBK that displays the
+// same). Plans must not guess between them.
+var ErrAmbiguous = errors.New("redacted path matches more than one directory")
+
+// ResolveDir maps a redacted directory path to the real relative path of
+// the directory it stands for. Redacted and real paths correspond segment
+// by segment, so the answer is the first k segments of any file below it;
+// the smallest and largest real paths below it must agree on those k
+// segments, or the redacted path is ambiguous. ok is false when no
+// cataloged file lies below the directory.
+func (d *DB) ResolveDir(rdir string) (real string, ok bool, err error) {
+	rdir = CleanDir(rdir)
+	if rdir == "" {
+		return "", true, nil
+	}
+	where, args, _ := under(rdir)
+	var lo, hi []byte
+	err = d.db.QueryRow(`SELECT MIN(path), MAX(path) FROM files WHERE `+where, args...).Scan(&lo, &hi)
+	if err != nil {
+		return "", false, err
+	}
+	if lo == nil {
+		return "", false, nil
+	}
+	k := strings.Count(rdir, "/") + 1
+	a, b := prefix(string(lo), k), prefix(string(hi), k)
+	if a == "" || a != b {
+		return "", false, ErrAmbiguous
+	}
+	return a, true, nil
+}
+
+// prefix returns the first k slash-separated segments of p, or "" if p has
+// no more than k segments (the prefix must be a directory, not the file).
+func prefix(p string, k int) string {
+	segs := strings.Split(p, "/")
+	if len(segs) <= k {
+		return ""
+	}
+	return strings.Join(segs[:k], "/")
+}
+
 // SameContent returns up to limit other files with the same full hash.
 func (d *DB) SameContent(id int64, limit int) ([]File, error) {
 	return d.files(`SELECT `+fileColumns+` FROM files

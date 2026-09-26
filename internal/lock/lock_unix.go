@@ -3,7 +3,7 @@
 
 //go:build unix
 
-package main
+package lock
 
 import (
 	"errors"
@@ -12,9 +12,9 @@ import (
 	"syscall"
 )
 
-// lockFile takes an exclusive lock so overlapping scans (say, a slow scan
-// still running when cron fires the next one) fail fast instead of racing.
-func lockFile(path string) (unlock func(), err error) {
+// File takes an exclusive lock so that overlapping runs (a slow scan still
+// going when cron fires the next one, or a second executor) fail fast.
+func File(path string) (unlock func(), err error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
@@ -22,7 +22,7 @@ func lockFile(path string) (unlock func(), err error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another scan is running (%s is locked)", path)
+			return nil, fmt.Errorf("another nasbutler process holds %s", path)
 		}
 		return nil, err
 	}

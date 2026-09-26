@@ -1,11 +1,13 @@
 ---
 name: nas-organize
-description: Use when helping someone understand or organize a personal file archive through the nasbutler MCP server — 摸底一个 NAS 文件库（有什么、谁占空间、哪里重复、哪里有敏感信息）并提出整理方案。Covers the survey workflow, how to read pseudonyms like [phone#…] / [secret#…] / [secret-dir#…], opaque directories, and what never to attempt. Keywords: nasbutler, survey, duplicates, sensitive_report, 文件整理, 分类, 去重, 监控录像, 敏感信息.
+description: Use when helping someone understand or reorganize a personal file archive through the nasbutler MCP server — 摸底一个 NAS 文件库（有什么、谁占空间、哪里重复、哪里有敏感信息），提整理方案，并通过计划（plan_create / plan_add / plan_submit）交给人审批执行。Covers the survey workflow, how to read pseudonyms like [phone#…] / [secret#…] / [secret-dir#…], opaque directories, building and batching plans, waiting for human approval, undo, and what never to attempt. Keywords: nasbutler, survey, duplicates, sensitive_report, plan, quarantine, undo_request, 文件整理, 分类, 去重, 隔离, 审批, 监控录像, 敏感信息.
 ---
 
 # 用 nasbutler 摸底和整理文件库
 
-nasbutler 是一个只读、纯信息模式的 MCP 服务：你能看到脱敏后的路径、大小、时间、类型、敏感信息计数、重复文件和媒体参数，看不到任何文件内容。当前版本（v0.1）**不能移动、改名或删除任何东西**，产出是一份给人看的整理方案。
+nasbutler 是一个纯信息模式的 MCP 服务：你能看到脱敏后的路径、大小、时间、类型、敏感信息计数、重复文件和媒体参数，看不到任何文件内容。
+
+你**不能直接改文件**。要整理，就建一个计划：只能移动（含改名）和隔离，没有删除。计划提交后，由人在飞书卡片上或服务器上批准，再由另一个执行器进程执行。你只能看到结果。
 
 ## 读懂返回值
 
@@ -35,8 +37,31 @@ nasbutler 是一个只读、纯信息模式的 MCP 服务：你能看到脱敏�
 - **机密和个人信息**：建议集中存放、以后移进加密目录，而不是分散在各处。不要在方案里复述任何化名背后可能是什么。
 - **不确定的就标出来问用户**，比如某个 opaque 目录是不是还需要、某组重复是不是有意保留。
 
+## 把方案变成计划
+
+先把方案给用户看，用户同意哪部分，再为哪部分建计划。
+
+1. **`plan_create`**：`title` 写一句人一眼能懂的话，比如"2024 年照片按月归档"。审批人在卡片上最先看到它。
+2. **`plan_add`**：追加操作。
+   - `{"op": "move", "file": <id>, "to_dir": "照片/2024/03"}`：移动；加 `"name": "新名字.jpg"` 就是改名。
+   - `{"op": "quarantine", "file": <id>}`：隔离。垃圾、多余的重复副本用它，**不存在删除**。
+   - `to_dir` 用返回里的脱敏路径。含化名的段（`clients/[phone#55417b29]`）只能指向已有目录；普通段不存在时会自动新建。
+   - 每一项当场校验，不合格的放在 `rejected` 里退回，并说明原因（机密文件、目标已存在、目标在受保护区……）。按原因调整，不要硬试。
+3. **`plan_show`**：提交前自己核对一遍，`issues` 应该为空。
+4. **`plan_submit`**：提交后告诉用户"已提交，等你审批"，**不要说已经整理好了**。
+5. **`plan_status`**：状态依次是 `submitted` → `pending_approval` → `approved` → `executing` → `done`，也可能是 `failed`、`rejected`、`expired`。只有看到 `done`，才能说执行完了。`failed` 时看 `errors`：已完成的那部分已经生效，可以撤销。
+6. 执行完索引会自动重扫，用 `survey` 看新结构。
+7. **`undo_request`**：用户不满意时撤销，会生成一个新的撤销计划，同样要人批准。
+
+计划的粒度：
+
+- **一个计划只做一件事**（"归档 2024 照片""隔离 Thumbs.db 和空文件"），审批人才好判断。单个计划最多几千项，超过就拆开。
+- 同一个文件在一个计划里只能出现一次，两个操作也不能指向同一个目标。
+- 机密文件（`[secret#…]`）进不了计划；受保护、隐藏、不透明、机密目录也不能作为目标。
+
 ## 不要做的事
 
-- 不要尝试绕过 nasbutler 直接访问文件（ssh、挂载、其他工具）。
+- 不要尝试绕过 nasbutler 直接访问或修改文件（ssh、挂载、其他工具）。
 - 不要试图通过大量查询拼凑出被隐去的名字或值。
-- 不要声称已经移动或删除了任何文件：这个版本做不到。
+- 计划没到 `done` 之前，不要声称已经移动或隔离了文件。
+- 不要催用户批准，也不要替用户做决定；审批是人的事。

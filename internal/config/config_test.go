@@ -34,6 +34,10 @@ func TestLoadDefaults(t *testing.T) {
 	if !c.RuleSet.Opaque("backup") {
 		t.Error("rules not compiled")
 	}
+	if c.Exec.QuarantineDir != filepath.Join(c.Root, ".nasbutler", "quarantine") || c.Exec.Approver != "feishu" ||
+		c.Plans.Dir != filepath.Join(c.StateDir, "plans") || c.ApprovalTTL.Hours() != 24 {
+		t.Errorf("v0.2 defaults not applied: %+v %+v %v", c.Exec, c.Plans, c.ApprovalTTL)
+	}
 }
 
 func TestLoadRejects(t *testing.T) {
@@ -47,6 +51,12 @@ func TestLoadRejects(t *testing.T) {
 		"bad pattern":     "root = '" + root + "'\nstate_dir = '" + state + "'\n[rules]\nsecret = ['a/[b']\n",
 		"missing root":    "state_dir = '" + state + "'\n",
 		"tiny result cap": "root = '" + root + "'\nstate_dir = '" + state + "'\n[serve]\nmax_result_bytes = 10\n",
+		"bad approver":    "root = '" + root + "'\nstate_dir = '" + state + "'\n[exec]\napprover = 'email'\n",
+		"short ttl":       "root = '" + root + "'\nstate_dir = '" + state + "'\n[exec]\napproval_ttl = '5s'\n",
+		"visible quarantine": "root = '" + root + "'\nstate_dir = '" + state + "'\n[exec]\nquarantine_dir = '" +
+			filepath.Join(root, "trash") + "'\n",
+		"plans in root": "root = '" + root + "'\nstate_dir = '" + state + "'\n[plans]\ndir = '" + filepath.Join(root, "plans") + "'\n",
+		"shared dirs":   "root = '" + root + "'\nstate_dir = '" + state + "'\n[plans]\ndir = '/tmp/x'\n[exec]\ndir = '/tmp/x'\n",
 	} {
 		if name == "root in state" {
 			os.MkdirAll(filepath.Join(state, "r"), 0o700)

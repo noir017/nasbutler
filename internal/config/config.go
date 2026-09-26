@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -22,9 +23,10 @@ type Config struct {
 	Root     string `toml:"root"`
 	StateDir string `toml:"state_dir"`
 	Rules    struct {
-		Hidden []string `toml:"hidden"`
-		Opaque []string `toml:"opaque"`
-		Secret []string `toml:"secret"`
+		Hidden    []string `toml:"hidden"`
+		Opaque    []string `toml:"opaque"`
+		Secret    []string `toml:"secret"`
+		Protected []string `toml:"protected"`
 	} `toml:"rules"`
 	Scan struct {
 		MaxContentBytes int64 `toml:"max_content_bytes"`
@@ -38,13 +40,35 @@ type Config struct {
 		MaxLimit       int     `toml:"max_limit"`
 		FFprobe        *string `toml:"ffprobe"`
 	} `toml:"serve"`
+	Plans struct {
+		Dir    string `toml:"dir"`
+		MaxOps int    `toml:"max_ops"`
+	} `toml:"plans"`
+	Exec struct {
+		Dir           string `toml:"dir"`
+		QuarantineDir string `toml:"quarantine_dir"`
+		Approver      string `toml:"approver"`
+		ApprovalTTL   string `toml:"approval_ttl"`
+		Rescan        *bool  `toml:"rescan"`
+	} `toml:"exec"`
+	Feishu struct {
+		AppID          string `toml:"app_id"`
+		AppSecretFile  string `toml:"app_secret_file"`
+		ApproverOpenID string `toml:"approver_open_id"`
+		BaseURL        string `toml:"base_url"`
+	} `toml:"feishu"`
 
 	// RuleSet is compiled from Rules by Load.
 	RuleSet *rules.Set `toml:"-"`
+	// ApprovalTTL is parsed from Exec.ApprovalTTL by Load.
+	ApprovalTTL time.Duration `toml:"-"`
 }
 
-// TokenEnv overrides serve.token_file.
-const TokenEnv = "NASBUTLER_TOKEN"
+// Environment variables that override secret files.
+const (
+	TokenEnv        = "NASBUTLER_TOKEN"
+	FeishuSecretEnv = "NASBUTLER_FEISHU_APP_SECRET"
+)
 
 // Load reads, defaults and validates the file at path. Unknown keys are an
 // error: a misspelt rule in a privacy tool must not be silently ignored.
@@ -93,6 +117,22 @@ func (c *Config) defaults() {
 		f := "ffprobe"
 		c.Serve.FFprobe = &f
 	}
+	if c.Plans.MaxOps == 0 {
+		c.Plans.MaxOps = 5000
+	}
+	if c.Exec.Approver == "" {
+		c.Exec.Approver = "feishu"
+	}
+	if c.Exec.ApprovalTTL == "" {
+		c.Exec.ApprovalTTL = "24h"
+	}
+	if c.Exec.Rescan == nil {
+		t := true
+		c.Exec.Rescan = &t
+	}
+	if c.Feishu.BaseURL == "" {
+		c.Feishu.BaseURL = "https://open.feishu.cn"
+	}
 }
 
 func (c *Config) validate() error {
@@ -125,8 +165,50 @@ func (c *Config) validate() error {
 	if c.Serve.MaxResultBytes < 1024 || c.Serve.MaxLimit < 1 {
 		return errors.New("serve.max_result_bytes must be at least 1024 and serve.max_limit at least 1")
 	}
-	c.RuleSet, err = rules.Compile(c.Rules.Hidden, c.Rules.Opaque, c.Rules.Secret)
-	return err
+	if c.Plans.MaxOps < 1 {
+		return errors.New("plans.max_ops must be at least 1")
+	}
+	if c.Exec.Approver != "feishu" && c.Exec.Approver != "local" {
+		return fmt.Errorf("exec.approver must be \"feishu\" or \"local\", not %q", c.Exec.Approver)
+	}
+	if c.ApprovalTTL, err = time.ParseDuration(c.Exec.ApprovalTTL); err != nil || c.ApprovalTTL < time.Minute {
+		return fmt.Errorf("exec.approval_ttl %q must be a duration of at least 1m", c.Exec.ApprovalTTL)
+	}
+	if c.Plans.Dir == "" {
+		c.Plans.Dir = filepath.Join(c.StateDir, "plans")
+	}
+	if c.Exec.Dir == "" {
+		c.Exec.Dir = filepath.Join(c.StateDir, "exec")
+	}
+	if c.Exec.QuarantineDir == "" {
+		c.Exec.QuarantineDir = filepath.Join(c.Root, rules.StateDir, "quarantine")
+	}
+	for name, p := range map[string]string{"plans.dir": c.Plans.Dir, "exec.dir": c.Exec.Dir, "exec.quarantine_dir": c.Exec.QuarantineDir} {
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("%s must be an absolute path", name)
+		}
+	}
+	if within(c.Plans.Dir, c.Root) || within(c.Exec.Dir, c.Root) {
+		return errors.New("plans.dir and exec.dir must be outside root")
+	}
+	if c.Plans.Dir == c.Exec.Dir {
+		return errors.New("plans.dir and exec.dir must differ: they belong to different processes")
+	}
+	c.RuleSet, err = rules.Compile(rules.Patterns{
+		Hidden: c.Rules.Hidden, Opaque: c.Rules.Opaque, Secret: c.Rules.Secret, Protected: c.Rules.Protected,
+	})
+	if err != nil {
+		return err
+	}
+	// A quarantine inside the root must be hidden, or the scanner would
+	// catalog quarantined files as if they were still part of the archive.
+	if q := c.Exec.QuarantineDir; within(q, c.Root) {
+		rel, _ := filepath.Rel(c.Root, q)
+		if rel == "." || !c.RuleSet.Path(filepath.ToSlash(rel)).Hidden {
+			return errors.New("exec.quarantine_dir inside root must be under a hidden directory (the default .nasbutler/ is)")
+		}
+	}
+	return nil
 }
 
 func within(p, dir string) bool {
@@ -147,22 +229,32 @@ func (c *Config) LockPath() string { return filepath.Join(c.StateDir, "scan.lock
 
 // Token returns the HTTP bearer token and where it came from.
 func (c *Config) Token() (token, source string, err error) {
-	if t := strings.TrimSpace(os.Getenv(TokenEnv)); t != "" {
-		return t, "$" + TokenEnv, nil
+	return secret(TokenEnv, c.Serve.TokenFile, "serve.token_file")
+}
+
+// FeishuSecret returns the Feishu app secret and where it came from.
+func (c *Config) FeishuSecret() (secretValue, source string, err error) {
+	return secret(FeishuSecretEnv, c.Feishu.AppSecretFile, "feishu.app_secret_file")
+}
+
+// secret reads a credential from env, else from an owner-only file.
+func secret(env, file, key string) (string, string, error) {
+	if t := strings.TrimSpace(os.Getenv(env)); t != "" {
+		return t, "$" + env, nil
 	}
-	if c.Serve.TokenFile == "" {
-		return "", "", fmt.Errorf("no token: set $%s or serve.token_file", TokenEnv)
+	if file == "" {
+		return "", "", fmt.Errorf("not configured: set $%s or %s", env, key)
 	}
-	st, err := os.Stat(c.Serve.TokenFile)
+	st, err := os.Stat(file)
 	if err != nil {
 		return "", "", err
 	}
 	if st.Mode().Perm()&0o077 != 0 {
-		return "", "", fmt.Errorf("%s must not be readable by group or others (chmod 600)", c.Serve.TokenFile)
+		return "", "", fmt.Errorf("%s must not be readable by group or others (chmod 600)", file)
 	}
-	b, err := os.ReadFile(c.Serve.TokenFile)
+	b, err := os.ReadFile(file)
 	if err != nil {
 		return "", "", err
 	}
-	return strings.TrimSpace(string(b)), c.Serve.TokenFile, nil
+	return strings.TrimSpace(string(b)), file, nil
 }

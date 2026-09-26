@@ -31,7 +31,7 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	rs, err := rules.Compile(fixture.Hidden, fixture.Opaque, nil)
+	rs, err := rules.Compile(rules.Patterns{Hidden: fixture.Hidden, Opaque: fixture.Opaque})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestIncremental(t *testing.T) {
 	}
 
 	// Hiding a directory removes what was cataloged beneath it.
-	rs, _ := rules.Compile(append([]string{"docs"}, fixture.Hidden...), fixture.Opaque, nil)
+	rs, _ := rules.Compile(rules.Patterns{Hidden: append([]string{"docs"}, fixture.Hidden...), Opaque: fixture.Opaque})
 	e.opts.Rules = rs
 	e.scan(t)
 	for rel := range e.byPath(t) {
@@ -188,7 +188,7 @@ func TestIncremental(t *testing.T) {
 	}
 
 	// New secret rules reclassify everything.
-	rs, _ = rules.Compile(fixture.Hidden, fixture.Opaque, []string{"photos/2023"})
+	rs, _ = rules.Compile(rules.Patterns{Hidden: fixture.Hidden, Opaque: fixture.Opaque, Secret: []string{"photos/2023"}})
 	e.opts.Rules = rs
 	e.scan(t)
 	if f := e.byPath(t)["photos/2023/big.mp4"]; detect.Level(f.Level) != detect.Secret {

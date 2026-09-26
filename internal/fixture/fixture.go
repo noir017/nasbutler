@@ -52,8 +52,11 @@ func Build(t testing.TB) string {
 		"docs/empty.txt":                           {},
 		"docs/ID_" + CNID + ".jpg":                 []byte("scan of an id card"),
 		"docs/api.txt":                             []byte("key: " + SKToken + "\n"),
-		"app/.env":                                 []byte("DB_PASSWORD=" + EnvPassword + "\n"),
-		"vault/renamed.dat":                        kdbx,
+		// A directory named after a phone number: plans must still be able
+		// to address it through its pseudonym.
+		"clients/" + Phone + "/invoice.pdf": []byte("%PDF-1.4 invoice"),
+		"app/.env":                          []byte("DB_PASSWORD=" + EnvPassword + "\n"),
+		"vault/renamed.dat":                 kdbx,
 		"Phone Backup/WeChat Files/wxid_" + SecretName + "/Msg/chat.db": []byte("messages"),
 		"private/" + HiddenName + ".txt":                                []byte("dear diary"),
 		"backup/server1/etc/app.conf":                                   []byte("password = \"" + EnvPassword + "\"\n"),

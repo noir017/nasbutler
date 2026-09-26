@@ -3,7 +3,7 @@
 
 //go:build linux
 
-package scan
+package fsx
 
 import (
 	"errors"
@@ -11,10 +11,10 @@ import (
 	"syscall"
 )
 
-// openRead opens a file read-only without following a final symlink and,
+// OpenRead opens a file read-only without following a final symlink and,
 // where the kernel allows it (file owner or CAP_FOWNER), without updating
 // its access time: cataloging should leave no trace on the files.
-func openRead(p string) (*os.File, error) {
+func OpenRead(p string) (*os.File, error) {
 	flags := syscall.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
 	fd, err := syscall.Open(p, flags|syscall.O_NOATIME, 0)
 	if errors.Is(err, syscall.EPERM) {

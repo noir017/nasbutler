@@ -27,23 +27,35 @@ import (
 // change, so catalogs classified by an older build get reclassified.
 const Version = "1"
 
-// Set is a compiled rule set.
-type Set struct {
-	hidden, opaque, secret []string
-	fingerprint            string
+// StateDir is nasbutler's own directory under the root (the default
+// quarantine lives there). It is always hidden.
+const StateDir = ".nasbutler"
+
+// Patterns are the user's rules, one list per kind.
+type Patterns struct {
+	Hidden, Opaque, Secret, Protected []string
 }
 
-// Compile validates user patterns and adds the built-in secret rules.
-func Compile(hidden, opaque, secret []string) (*Set, error) {
+// Set is a compiled rule set.
+type Set struct {
+	hidden, opaque, secret, protected []string
+	fingerprint                       string
+}
+
+// Compile validates user patterns and adds the built-in rules.
+func Compile(p Patterns) (*Set, error) {
 	s := &Set{}
 	var err error
-	if s.hidden, err = compileAll("hidden", hidden); err != nil {
+	if s.hidden, err = compileAll("hidden", append([]string{"/" + StateDir}, p.Hidden...)); err != nil {
 		return nil, err
 	}
-	if s.opaque, err = compileAll("opaque", opaque); err != nil {
+	if s.opaque, err = compileAll("opaque", p.Opaque); err != nil {
 		return nil, err
 	}
-	if s.secret, err = compileAll("secret", append(append([]string{}, BuiltinSecret...), secret...)); err != nil {
+	if s.secret, err = compileAll("secret", append(append([]string{}, BuiltinSecret...), p.Secret...)); err != nil {
+		return nil, err
+	}
+	if s.protected, err = compileAll("protected", p.Protected); err != nil {
 		return nil, err
 	}
 	sorted := append([]string{}, s.secret...)
@@ -94,6 +106,30 @@ func (s *Set) Opaque(rel string) bool { return matchAny(s.opaque, rel) }
 
 // Secret reports whether rel is a secret file or secret directory.
 func (s *Set) Secret(rel string) bool { return matchAny(s.secret, rel) }
+
+// Flags describes a path together with all its ancestors.
+type Flags struct {
+	Hidden, Opaque, Secret, Protected bool
+}
+
+// Off reports whether plans must not touch the path: anything hidden,
+// opaque, secret or protected, at the path itself or above it.
+func (f Flags) Off() bool { return f.Hidden || f.Opaque || f.Secret || f.Protected }
+
+// Path checks rel and every ancestor of it. The scanner applies rules one
+// directory at a time; plan validation needs the whole chain at once.
+func (s *Set) Path(rel string) Flags {
+	var f Flags
+	segs := strings.Split(strings.Trim(rel, "/"), "/")
+	for i := range segs {
+		p := strings.Join(segs[:i+1], "/")
+		f.Hidden = f.Hidden || s.Hidden(p)
+		f.Opaque = f.Opaque || s.Opaque(p)
+		f.Secret = f.Secret || s.Secret(p)
+		f.Protected = f.Protected || matchAny(s.protected, p)
+	}
+	return f
+}
 
 // Fingerprint identifies the classification-relevant rules. It covers only
 // secret rules: hidden and opaque changes take effect by the walk itself.

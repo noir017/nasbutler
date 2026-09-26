@@ -182,7 +182,11 @@ func (s *Server) status(ctx context.Context, _ *mcp.CallToolRequest, _ StatusIn)
 	if err != nil {
 		return nil, StatusOut{}, err
 	}
-	return nil, StatusOut{Status: st, Mode: "metadata-only, read-only", Version: s.o.Version, ProbeAvailable: s.probeOK}, nil
+	mode := "metadata-only, read-only"
+	if s.o.Plans.Dir != "" {
+		mode = "metadata-only; changes only through human-approved plans"
+	}
+	return nil, StatusOut{Status: st, Mode: mode, Version: s.o.Version, ProbeAvailable: s.probeOK}, nil
 }
 
 func (s *Server) survey(ctx context.Context, _ *mcp.CallToolRequest, in DirIn) (*mcp.CallToolResult, *catalog.Survey, error) {

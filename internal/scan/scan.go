@@ -20,14 +20,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 	"time"
-	"unicode/utf8"
-
-	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/noir017/nasbutler/internal/catalog"
 	"github.com/noir017/nasbutler/internal/detect"
+	"github.com/noir017/nasbutler/internal/fsx"
 	"github.com/noir017/nasbutler/internal/kind"
 	"github.com/noir017/nasbutler/internal/redact"
 	"github.com/noir017/nasbutler/internal/rules"
@@ -69,7 +66,6 @@ type scanner struct {
 	dirs  map[string]dirState
 	st    Stats
 	last  time.Time
-	gb    func(string) (string, error)
 	chunk int64
 }
 
@@ -86,7 +82,6 @@ func Run(ctx context.Context, db *catalog.DB, o Options) (Stats, error) {
 		// under; a change to either reclassifies them.
 		fp:    o.Rules.Fingerprint() + ":" + o.Redactor.Token("key", ""),
 		dirs:  map[string]dirState{".": {}},
-		gb:    simplifiedchinese.GB18030.NewDecoder().String,
 		chunk: 64 << 10,
 		last:  time.Now(),
 	}
@@ -225,7 +220,7 @@ func (s *scanner) file(abs, rel string, info fs.FileInfo, parent dirState) error
 		Ext:   kind.Ext(name),
 		Size:  info.Size(),
 		MTime: info.ModTime().UnixNano(),
-		Inode: inode(info),
+		Inode: fsx.Inode(info),
 		Rules: s.fp,
 	}
 	s.st.Files++
@@ -258,7 +253,7 @@ func (s *scanner) file(abs, rel string, info fs.FileInfo, parent dirState) error
 				s.st.Errors++
 			}
 		}
-		note(detect.FindString(s.displayName(name)))
+		note(detect.FindString(fsx.DisplayName(name)))
 	}
 	f.Kind, f.Level, f.Findings = string(k), int(level), findings
 	if level == detect.Secret {
@@ -273,7 +268,7 @@ func (s *scanner) file(abs, rel string, info fs.FileInfo, parent dirState) error
 // inspect reads the head of a file to classify it and, for text, up to
 // MaxContent bytes to look for sensitive values.
 func (s *scanner) inspect(abs, name string, k kind.Kind, known bool, note func([]detect.Finding)) (kind.Kind, bool, error) {
-	fh, err := openRead(abs)
+	fh, err := fsx.OpenRead(abs)
 	if err != nil {
 		return k, false, err
 	}
@@ -306,32 +301,8 @@ func (s *scanner) inspect(abs, name string, k kind.Kind, known bool, note func([
 
 // segment is the redacted display form of one path component.
 func (s *scanner) segment(name string) string {
-	r, _ := s.o.Redactor.String(s.displayName(name))
+	r, _ := s.o.Redactor.String(fsx.DisplayName(name))
 	return r
-}
-
-// displayName turns a name into valid UTF-8 for display. Names written by
-// old Chinese Windows systems are usually GBK; anything else undecodable
-// has its bad bytes percent-escaped, which keeps distinct names distinct.
-func (s *scanner) displayName(name string) string {
-	if utf8.ValidString(name) {
-		return name
-	}
-	if d, err := s.gb(name); err == nil && utf8.ValidString(d) && !strings.ContainsRune(d, utf8.RuneError) {
-		return d
-	}
-	var sb strings.Builder
-	for i := 0; i < len(name); {
-		r, size := utf8.DecodeRuneInString(name[i:])
-		if r == utf8.RuneError && size <= 1 {
-			fmt.Fprintf(&sb, "%%%02X", name[i])
-			i++
-			continue
-		}
-		sb.WriteString(name[i : i+size])
-		i += size
-	}
-	return sb.String()
 }
 
 func join(dir, name string) string {
@@ -400,7 +371,7 @@ func (s *scanner) hash(ctx context.Context, db *catalog.DB) error {
 // openJob opens a hash job's file and checks it still has the cataloged
 // size; a file that changed since the walk is skipped until the next scan.
 func (s *scanner) openJob(j catalog.HashJob) (*os.File, error) {
-	fh, err := openRead(filepath.Join(s.o.Root, filepath.FromSlash(string(j.Path))))
+	fh, err := fsx.OpenRead(filepath.Join(s.o.Root, filepath.FromSlash(string(j.Path))))
 	if err != nil {
 		return nil, err
 	}

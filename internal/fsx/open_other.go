@@ -3,10 +3,10 @@
 
 //go:build !linux
 
-package scan
+package fsx
 
 import "os"
 
-// openRead opens a file read-only. Only the Linux build refuses symlinks
+// OpenRead opens a file read-only. Only the Linux build refuses symlinks
 // and avoids access-time updates; other platforms are for development.
-func openRead(p string) (*os.File, error) { return os.Open(p) }
+func OpenRead(p string) (*os.File, error) { return os.Open(p) }

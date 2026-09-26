@@ -38,7 +38,7 @@ func newHarness(t *testing.T, maxBytes int) *harness {
 	root, _ = filepath.EvalSymlinks(root)
 	dbPath := filepath.Join(t.TempDir(), "catalog.db")
 	red := redact.New([]byte(strings.Repeat("k", 32)))
-	rs, err := rules.Compile(fixture.Hidden, fixture.Opaque, nil)
+	rs, err := rules.Compile(rules.Patterns{Hidden: fixture.Hidden, Opaque: fixture.Opaque})
 	if err != nil {
 		t.Fatal(err)
 	}
